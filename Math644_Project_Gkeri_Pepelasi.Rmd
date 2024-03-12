@@ -1,0 +1,379 @@
+---
+title: "Math 644 Project"
+author: "Gkeri Pepelasi"
+date: "12/11/2021"
+output: pdf_document
+
+---
+
+```{R message=FALSE, warning=FALSE}
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)          # data wrangling
+library(caret)          # machine learning functions
+library(MLmetrics)      # machine learning metrics
+library(car)            # VIF calculation
+library(lmtest)
+```
+# Predicting medical expense 
+
+
+## Intro
+
+In order for a health insurance company to make money, it needs to collect more in yearly premiums than it spends on medical care to its beneficiaries. As a result, insurers invest a great deal of time and money in developing models that accurately forecast medical expenses for the insured population.
+
+Medical expenses are difficult to estimate because the most costly conditions are rare and seemingly random. Still, some conditions are more prevalent for certain segments of the population. For instance, lung cancer is more likely among smokers than non-smokers, and heart disease may be more likely among the obese.
+
+The goal of this analysis is to use patient data to estimate the average medical care expenses for such population segments. These estimates can be used to create actuarial tables that set the price of yearly premiums higher or lower, depending on the expected treatment costs.
+
+
+``` {r}
+insurance <- read.csv("C:\\Users\\gpepe\\OneDrive\\Documents\\insurance.csv", header = T,stringsAsFactors = T)
+insurance <- data.frame(insurance)
+```
+
+insurance is a dataframe with 1,338 observations and 7 variables:
+
+1. age: age of primary beneficiary
+
+2. sex: insurance contractor gender, female, male
+
+3. BMI: Body mass index, providing an understanding of body, weights that are
+relatively high or low relative to height, objective index of body weight (kg / m ^ 2) using the ratio of height to weight, ideally 18.5 to 24.9
+
+4. children: Number of children covered by health insurance / Number of dependents
+
+5. smoker: Smoking or not
+
+6. region: the beneficiary’s residential area in the US, northeast, southeast, southwest, northwest
+
+7. charges: Individual medical costs billed by health insurance
+
+## Data exploration
+
+
+It is important to give some thought to how these variables may be related to billed medical expenses. For instance, we might expect that older people and smokers are at higher risk of large medical expenses. Unlike many other machine learning methods, in regression analysis, the relationships among the features are typically specified by the user rather than being detected automatically. 
+
+``` {r}
+str(insurance)
+
+```
+
+Our model’s dependent variable is expenses, which measures the medical costs each person charged to the insurance plan for the year. Prior to building a regression model, it is often helpful to check for normality. Although linear regression does not strictly require a normally distributed dependent variable, the model often fits better when this is true. Let’s take a look at the summary statistics:
+
+``` {r}
+summary(insurance)
+
+```
+
+Looking at the response variable, the minimum value is 1122 while the maximum value is 63770. Most points cluster between 4740 and 16640. This large variance in the response variable indicates that there are potential outliers. The other quantitative variables are reasonably varied.
+
+Because the mean value of charges is greater than the median, this implies that the distribution of insurance expenses is right-skewed. We can confirm this visually using a histogram and the output is shown as follows:
+
+
+``` {r}
+
+ggplot(data = insurance, aes(x = charges)) + 
+   
+  geom_density(alpha=0.5)+
+   
+  ggtitle("Distribution of Charges")
+
+```
+
+
+
+The distribution is right-skewed with a long tail to the right.The large majority of individuals in our data have yearly medical expenses between zero and $15,000, although the tail of the distribution extends far past these peaks. Because linear regression assumes a normal distribution for the dependent variable, this distribution is not ideal. In practice, the assumptions of linear regression are often violated. If needed, we may be able to correct this later on. There’s a bump at around $40,000, perhaps another hidden distribution.
+
+
+
+
+``` {r}
+
+for (col in c('sex', 'region', 'children', 'smoker')) {
+  plot <- ggplot(data = insurance,
+                 aes_string(x = col, y = 'charges', group = col, fill = col)) + 
+            geom_boxplot(show.legend = FALSE) + 
+            ggtitle(glue::glue("Boxplot of Medical Charges per {col}"))
+  print(plot)
+}
+
+```
+
+
+The plot above shows the boxplot of variable sex for insurance costs. The median costs for both sexes are pretty equal though there is more variance in insurnace costs for male.
+There’s not a clear trend for variable region in relation with insurance costs. The insurance costs decreases slightly from east to west, however.
+
+There’s a clear trend here. Smokers have a much higher median insurance costs in comparison with non-smokers.
+
+The median insurance costs start high for contractors with zero children then goes down for 1 children contractors. The median costs keep increasing but then decreases when a contractor has 5 children. This could be due to the insurance companies policy to start with a high default cost. They give discount for contractors with children at a small rate then give really high discount for contractors with more than 5 children. One thing to note is that the boxplots show there are many outliers in our categorical variables. The outliers have the potential to influence the model so we’ll come back to address this issue if necessary.
+Lastly, smoker seems to make a significant difference to charges given by health insurance.
+Let’s draw again the distribution of charges, now categorizing them into smoker.
+
+
+```{r message=FALSE, warning=FALSE}
+ggplot(data = insurance, aes(x = charges, fill = smoker)) + 
+  geom_density(alpha = 0.5) + 
+  ggtitle("Distribution of Charges per Smoking Category")
+
+```
+We see clearly that smokers have more charges than non-smokers.
+
+```{r message=FALSE, warning=FALSE}
+
+for (feat in c('age', 'bmi', 'children')) {
+  plot <- ggplot(data = insurance, aes_string(x = feat, y = 'charges', group = 'smoker', fill = 'smoker', col = 'smoker')) + 
+    geom_jitter() + 
+    geom_smooth(method = 'lm') +
+    ggtitle(glue::glue("Charges vs {feat}"))  
+  print(plot)
+}
+
+```
+
+Smoker seems to have the highest impact on medical charges, even though the charges are growing with age, bmi, and children. Also, people who have more children generally smoke less.
+
+
+## Training a model 
+
+
+
+Splitting the dataset into the training set and the test set
+
+```{r warning=FALSE}
+ 
+set.seed(123)
+## Obtain the training index
+training_index <- sample(seq_len(nrow(insurance)), size = floor(0.7 * nrow(insurance)))
+## Partition the data
+training_set <- insurance[training_index, ]
+test_set <- insurance[-training_index, ]
+```
+
+### Linear Regression
+
+Fit Multiple Linear Regression to the training set
+
+``` {r}
+model1 <- lm(charges ~., data = training_set)
+step(model1,direction = "backward")
+```
+
+
+``` {r}
+linear_reg <- lm(formula = charges ~ age + bmi + children + smoker, data = training_set)
+y_pred <- predict(linear_reg, test_set)
+mae <- MAE(y_pred, test_set$charges)
+rmse <- RMSE(y_pred, test_set$charges)
+lin_reg <- cbind("MAE" = mae, "RMSE" = rmse)
+lin_reg
+```
+
+
+ 
+
+
+### Polynomial Regression
+
+We can improve our model by feature engineering, specifically, by making new features that capture the interactions between existing features. This is called polynomial regression. The idea is to generate a new feature matrix consisting of all polynomial combinations of the features with degrees less than or equal to the specified degree. For example, if an input sample is two-dimensional and of the form [a, b], the degree-2 polynomial features are [1, a, b, a², ab, b²]. We will use degree 2.
+We don’t want charges to be included in the process of generating the polynomial combinations, so we take out charges from train and test and save them as y_train and y_test, respectively.
+
+``` {r}
+y_train <- training_set$charges
+y_test <- test_set$charges
+
+```
+
+From EDA we know that sex and region have no correlation with charges. We can drop them. Also, since polynomial combinations don’t make sense to categorical features, we mutate smoker as numeric.
+
+``` {r}
+X_train <- training_set %>% 
+  select(-c(charges, sex, region)) %>% 
+  mutate(smoker = as.numeric(smoker))
+X_test <- test_set %>% 
+  select(-c(charges, sex, region)) %>% 
+  mutate(smoker = as.numeric(smoker))
+
+```
+
+
+We use the formula below to apply polynomial combinations.
+
+
+``` {r}
+formula <- as.formula(
+  paste(
+    ' ~ .^2 + ', 
+    paste('poly(', colnames(X_train), ', 2, raw=TRUE)[, 2]', collapse = ' + ')
+  )
+)
+
+```
+Then, insert y_train and y_test back to the new datasets.
+
+``` {r}
+train_poly <- as.data.frame(model.matrix(formula, data = X_train))
+test_poly <- as.data.frame(model.matrix(formula, data = X_test))
+train_poly$charges <- y_train
+test_poly$charges <- y_test
+colnames(train_poly)
+```
+We can see that our new datasets train_poly and test_poly now have 16 columns:
+
+
+1.(Intercept) is a column consists of constant 1, this is the constant term in the polynomial.
+
+
+2.age , bmi , children , smoker are the original features.
+
+
+3.age² , bmi² , children² , smoker² are the square of the original features.
+
+
+4.age x bmi, age x children , age x smoker , bmi x children , bmi x smoker , children x smoker are six interactions between pairs of four features.
+
+
+5.charges is the target feature.
+
+We start with all features and work our way down using backward elimination.
+
+``` {r}
+polynom_regr <- lm(formula = charges ~ ., data = train_poly)
+step(polynom_regr)
+
+```
+``` {r}
+lm_poly <- lm(formula = charges ~ bmi + children + smoker + `poly(age, 2, raw = TRUE)[, 2]` + 
+    `poly(bmi, 2, raw = TRUE)[, 2]` + `poly(children, 2, raw = TRUE)[, 2]` + 
+    `bmi:smoker` + `children:smoker`, data = train_poly)
+y_pred <- predict(lm_poly, test_poly)
+mae1 <- MAE(y_pred, test_set$charges)
+rmse1 <- RMSE(y_pred, test_set$charges)
+
+
+poly_reg <- cbind("MAE" = mae1, "RMSE" = rmse1)
+poly_reg
+```
+
+### Summary of the two models
+
+``` {r}
+
+summary(linear_reg)
+
+```
+We have four features, all of which are significant (has a real effect, not due to random chance and sampling) on charges. From the coefficients, we know that a non-smoker zero years old who has no children and zero BMI will be charged -$12811 by health insurance (which we know this scenario is impossible). Also, since smoker has the biggest coefficient of all features, a unit change in smoker gives a bigger change in charges than a unit change in other features give, given all other features are fixed. In this case, given all other features are fixed, a non-smoker would have less charge than a smoker by $23,925, which makes sense.
+This model also has 0.7455 adjusted R-squared, which means the model with its features explains 74% of the total variation in charges.
+
+
+
+```{r}
+summary(lm_poly)
+
+```
+We have eight features, all of which are significant on charges, except for children:smoker. From the coefficients, we know that a non-smoker zero years old who has no children and zero BMI will be charged $12690  by health insurance (which we know this scenario is impossible). Also, since smoker has the biggest coefficient of all features, a unit change in smoker gives a bigger change in charges than a unit change in other features give, given all other features are fixed. In this case, given all other features are fixed, a non-smoker would have more charge than a smoker by $19950. 
+The adjusted R-squared of this model is 0.8422, which means the model with its features explains 84% of the total variation in charges. In other words, this Polynomial Regression model captures more variance of charges than the earlier Linear Regression model.
+
+
+
+
+
+### Improving the model 
+
+
+The model can be improved by looking deeper into several features. For example, assuming that the increase in age and the expenses is not in a linear fashion; the older one gets, an even larger amount of expenses for medical is needed when compared to a year prior, so a square term of the age, age^2 is added.
+
+Also, thinking that the bmi is affecting the medical expenses when one’s bmi passes certain threshold value is considered being obese. Therefore, another new term, bmi30, is added by categorize the numerical value bmi feature into two portions; 0 for bmi below 30 and 1 for bmi above.
+
+Finally, realizing that the increase in medical expenses is much higher for smoker than those with each unit incrase of bmi from the previous multiple regression model makes it reasonable to assume that the effect of smoking on medical expenses is a lot more and an obese smoker is spending even more on medical than it were for individual with obesity or is a smoker alone. Because individual is more proned to getting various healthy related issues when s/he is obese and smoking together. So an interaction term of bmi30*smoker is added in the improved model.
+
+
+
+```  {r}
+
+insurance$age2 <- insurance$age^2
+## Add an indicator for BMI
+insurance$bmi30 <- ifelse(insurance$bmi >= 30, 1, 0)
+## Partition the data again with the additional columns but using the same index
+training_set_new <- insurance[training_index, ]
+test_set_new <- insurance[-training_index, ]
+## Create the final model
+
+```
+
+``` {r}
+model_improv <- lm(charges~ age + bmi + children + smoker+age2+bmi30+bmi30*smoker, data=training_set_new)
+summary(model_improv)
+```
+``` {r}
+y_pred <- predict(model_improv, test_set_new)
+mae2 <- MAE(y_pred, test_set_new$charges)
+rmse2 <- RMSE(y_pred, test_set_new$charges)
+lin_reg2 <- cbind("MAE" = mae2, "RMSE" = rmse2)
+lin_reg2
+
+```
+
+Relative to our previous models, the R-squared value has improved from 0.74 to 0.84 and now about 0.87. Our model is now explaining 86.75 percent of the variation in medical treatment costs. Additionally, our theories about the model’s functional form seem to be validated. The higher-order age2 term is statistically significant, as is the obesity indicator, bmi30. The interaction between obesity and smoking suggests a massive effect; in addition to the increased costs of over $13,624 for smoking alone, obese smokers spend another $20058 per year. This may suggest that smoking exacerbates diseases associated with obesity.
+
+### Comparing models
+
+``` {r}
+compare <- cbind(c(lin_reg,lin_reg2,poly_reg))
+compare
+
+```
+
+### Predictions
+
+
+```{r}
+predictions = predict(model_improv, newdata = test_set_new)
+cor(predictions, test_set_new$charges)
+
+plot(predictions, test_set_new$charges,xlab="Predicted Medical expenses",ylab = "Tested medical expenses")
+abline(a = 0, b = 1, col = 'red', lwd = 3, lty = 2)
+plot(model_improv)
+```
+We see that mosto of our graphs looks normal except the normality one with the Q-Q plot when we see the impact of the outliers which they are seem to be far away from the line.
+``` {r}
+predict(model_improv,
+        data.frame(age = 18, age2 = 18^2, children = 0,
+                   bmi = 42, sex = "male", bmi30 = 1,
+                   smoker = "no", region = "northeast"))
+
+predict(model_improv,
+        data.frame(age = 18, age2 = 18^2, children = 0,
+                   bmi = 42, sex = "male", bmi30 = 1,
+                   smoker = "yes", region = "northeast"))
+```
+
+
+``` {r}
+
+predict(model_improv,
+        data.frame(age = 40, age2 = 40^2, children = 2,
+                   bmi = 35, sex = "female", bmi30 = 1,
+                   smoker = "no", region = "northeast"))
+
+predict(model_improv,
+        data.frame(age = 40, age2 = 40^2, children = 2,
+                   bmi = 35, sex = "female", bmi30 = 1,
+                   smoker = "yes", region = "northeast"))
+```
+
+
+``` {r}
+predict(model_improv,
+        data.frame(age = 80, age2 = 80^2, children = 4,
+                   bmi = 35, sex = "male", bmi30 = 1,
+                   smoker = "no", region = "northeast"))
+
+predict(model_improv,
+        data.frame(age = 80, age2 = 80^2, children = 4,
+                   bmi = 35, sex = "male", bmi30 = 1,
+                   smoker = "yes", region = "northeast"))
+
+```
+
+We predict the charges for 3 persons changing the parameter of smoking to "no" or "yes" and we can see the difference that is really significant . 
